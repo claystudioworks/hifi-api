@@ -1,5 +1,10 @@
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
+
+use governor::clock::DefaultClock;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 
 use chrono::Utc;
 use serde::Deserialize;
@@ -43,6 +48,10 @@ pub struct AccountState {
     pub error_count: AtomicU64,
     pub rate_limit_hits: AtomicU64,
     pub rate_limited_until: AtomicI64,
+    /// Per-account governor: 1 rps burst 3 — the core anti-ban choke.
+    pub limiter: Arc<RateLimiter<NotKeyed, InMemoryState, DefaultClock>>,
+    /// EWMA error rate *1000 (0..1000), alpha=0.3 — auto-disable at >300.
+    pub ewma_error: AtomicU64,
 }
 
 impl AccountState {
@@ -57,6 +66,10 @@ impl AccountState {
         is_active: bool,
         notes: String,
     ) -> Self {
+        let limiter = Arc::new(RateLimiter::direct(
+            Quota::per_second(NonZeroU32::new(1).unwrap())
+                .allow_burst(NonZeroU32::new(3).unwrap()),
+        ));
         Self {
             id,
             label,
@@ -73,7 +86,32 @@ impl AccountState {
             error_count: AtomicU64::new(0),
             rate_limit_hits: AtomicU64::new(0),
             rate_limited_until: AtomicI64::new(0),
+            limiter,
+            ewma_error: AtomicU64::new(0),
         }
+    }
+
+    /// Check per-account rate limiter without side effects — true if token available.
+    pub fn can_consume(&self) -> bool {
+        self.limiter.check().is_ok()
+    }
+
+    /// Update EWMA on error (alpha=0.3) and auto-disable if >300.
+    pub fn record_ewma_error(&self) {
+        let old = self.ewma_error.load(Ordering::Relaxed);
+        let new = (300 + 700 * old / 1000).min(1000);
+        self.ewma_error.store(new, Ordering::Relaxed);
+        if new > 300 {
+            self.is_active.store(false, Ordering::Relaxed);
+            tracing::warn!("Account {} auto-disabled: EWMA error {} > 300", self.id, new);
+        }
+    }
+
+    /// Decay EWMA on success.
+    pub fn record_ewma_success(&self) {
+        let old = self.ewma_error.load(Ordering::Relaxed);
+        let new = 700 * old / 1000;
+        self.ewma_error.store(new, Ordering::Relaxed);
     }
 }
 
@@ -232,7 +270,10 @@ impl AccountManager {
             if !account.is_active.load(Ordering::Relaxed) {
                 continue;
             }
-
+            // EWMA auto-disabled accounts are already inactive, but skip if EWMA >300 even if active due to race
+            if account.ewma_error.load(Ordering::Relaxed) > 300 {
+                continue;
+            }
             let rate_limited_until = account.rate_limited_until.load(Ordering::Relaxed);
             if rate_limited_until > now {
                 continue;
@@ -263,10 +304,29 @@ impl AccountManager {
         }
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let best = &accounts[scored[0].1];
-        best.last_used.store(now, Ordering::Relaxed);
-        best.request_count.fetch_add(1, Ordering::Relaxed);
-        Ok(best.clone())
+        // Try best accounts in order, respecting per-account governor (1 rps burst 3).
+        // `can_consume` consumes a token on success, so we only consume for the chosen account.
+        for (_, idx) in scored.iter() {
+            let acc = &accounts[*idx];
+            if acc.ewma_error.load(Ordering::Relaxed) > 300 {
+                continue;
+            }
+            if !acc.can_consume() {
+                tracing::debug!("Account {} hit per-account rate limit (1 rps burst 3)", acc.id);
+                continue;
+            }
+            acc.last_used.store(now, Ordering::Relaxed);
+            acc.request_count.fetch_add(1, Ordering::Relaxed);
+            acc.record_ewma_success();
+            // metrics: count selection as request (route unknown here, use "select")
+            crate::metrics::requests()
+                .with_label_values(&["select_account", "ok"])
+                .inc();
+            return Ok(acc.clone());
+        }
+        Err(AppError::ServiceUnavailable(
+            "All accounts are per-account rate-limited (1 rps burst 3) or EWMA-disabled — try again shortly".into(),
+        ))
     }
 
     pub async fn select_account(&self) -> Result<Arc<AccountState>, AppError> {
@@ -277,6 +337,10 @@ impl AccountManager {
         let now = Utc::now().timestamp();
         if let Some(account) = self.get_account_by_id(id).await {
             account.error_count.fetch_add(1, Ordering::Relaxed);
+            account.record_ewma_error();
+            crate::metrics::requests()
+                .with_label_values(&["mark_error", "ok"])
+                .inc();
             if let Some(db) = &self.db {
                 let _ = sqlx::query(
                     "UPDATE account_metrics SET error_count = error_count + 1, last_error_at = ?, last_error_message = ? WHERE account_id = ?",
@@ -295,6 +359,8 @@ impl AccountManager {
         if let Some(account) = self.get_account_by_id(id).await {
             account.rate_limit_hits.fetch_add(1, Ordering::Relaxed);
             account.rate_limited_until.store(until, Ordering::Relaxed);
+            account.record_ewma_error();
+            crate::metrics::hits_429().inc();
             if let Some(db) = &self.db {
                 let _ = sqlx::query(
                     "UPDATE account_metrics SET rate_limit_hits = rate_limit_hits + 1 WHERE account_id = ?",
