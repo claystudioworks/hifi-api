@@ -60,5 +60,42 @@ pub async fn init_pool(database_url: &str) -> Result<SqlitePool, sqlx::Error> {
     .execute(&pool)
     .await?;
 
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS cdn_cache (
+            track_id TEXT PRIMARY KEY,
+            drive_file_id TEXT NOT NULL,
+            web_content_link TEXT,
+            size_bytes INTEGER,
+            created_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_cdn_cache_created ON cdn_cache(created_at)")
+        .execute(&pool)
+        .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS sync_jobs (
+            id TEXT PRIMARY KEY,
+            track_id TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sync_jobs_status ON sync_jobs(status)")
+        .execute(&pool)
+        .await?;
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_sync_jobs_track ON sync_jobs(track_id)")
+        .execute(&pool)
+        .await?;
+
     Ok(pool)
 }

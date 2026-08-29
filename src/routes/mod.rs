@@ -1,5 +1,7 @@
 pub mod album;
 pub mod artist;
+pub mod batch;
+pub mod cdn;
 pub mod cover;
 pub mod health;
 pub mod info;

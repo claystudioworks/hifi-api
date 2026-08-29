@@ -8,6 +8,7 @@ pub mod account_manager;
 pub mod admin;
 pub mod anti_ban;
 pub mod cache;
+pub mod cdn;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -233,6 +234,11 @@ pub fn build_router(state: AppState) -> Router {
         .route("/topvideos/", get(routes::topvideos::get_top_videos))
         .route("/video/", get(routes::video::get_video))
         .route("/health", get(routes::health::health))
+        // Bulk + CDN (1-concurrent, 3-8s jitter, Drive Worker)
+        .route("/batch", post(routes::batch::post_batch))
+        .route("/cdn/{id}", get(routes::cdn::get_cdn))
+        .route("/sync/enqueue", post(routes::cdn::post_enqueue))
+        .route("/sync/status", get(routes::cdn::get_sync_status))
         // Prometheus metrics (text exposition) — visibility before bans
         .route("/metrics", get(routes::metrics::get_metrics))
         // Admin SPA (no auth — the SPA handles auth in-browser)
