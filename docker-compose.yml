@@ -1,13 +1,50 @@
 services:
-  web:
+  hifi-api:
     build: .
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=/data/hifi.db
+      - HIFI_API_URL=http://hifi-api:8000
+      # Drive Worker CDN (tas33n) — set these to enable bulk CDN
+      - CDN_WORKER_URL=${CDN_WORKER_URL:-}
+      - CDN_WORKER_TOKEN=${CDN_WORKER_TOKEN:-}
+      - RUST_LOG=${RUST_LOG:-info}
     ports:
       - "0.0.0.0:8000:8000"
     volumes:
-      - ./token.json:/app/token.json:ro
+      - hifi-data:/data
+      # Optional: mount Drive Worker credentials if using google-drive3 directly
+      # - ./gdrive-credentials.json:/app/credentials.json:ro
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # hifi-sync runs in same image but as separate service for clearer logs
+  # (alternatively, the Dockerfile CMD runs both together in one container)
+  hifi-sync:
+    build: .
+    command: ./hifi-sync
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=/data/hifi.db
+      - HIFI_API_URL=http://hifi-api:8000
+      - CDN_WORKER_URL=${CDN_WORKER_URL:-}
+      - CDN_WORKER_TOKEN=${CDN_WORKER_TOKEN:-}
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - hifi-data:/data
+    restart: unless-stopped
+    depends_on:
+      hifi-api:
+        condition: service_healthy
+
+volumes:
+  hifi-data:
 
 networks:
   default:

@@ -5,13 +5,16 @@ COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release 2>/dev/null || true
 COPY . .
-RUN touch src/main.rs
+RUN touch src/main.rs && mkdir -p src/bin && touch src/bin/hifi-sync.rs
 RUN cargo build --release
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates libsqlite3-0 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=builder /app/target/release/hifi-api .
+COPY --from=builder /app/target/release/hifi-sync .
+COPY --from=builder /app/migrations ./migrations
 EXPOSE 8000
 VOLUME ["/data"]
-CMD ["./hifi-api"]
+# Run both hifi-api (proxy) and hifi-sync (bulk daemon) — single image, two processes
+CMD ["sh", "-c", "./hifi-api & ./hifi-sync & wait"]
