@@ -11,6 +11,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod ip_limiter;
+pub mod metrics;
 pub mod proxy_manager;
 pub mod rate_limit;
 pub mod routes;
@@ -227,6 +228,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/topvideos/", get(routes::topvideos::get_top_videos))
         .route("/video/", get(routes::video::get_video))
         .route("/health", get(routes::health::health))
+        // Prometheus metrics (text exposition) — visibility before bans
+        .route("/metrics", get(routes::metrics::get_metrics))
         // Admin SPA (no auth — the SPA handles auth in-browser)
         .route("/admin", get(crate::admin::ui::admin_index))
         // Admin API routes (auth-protected)

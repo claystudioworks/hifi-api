@@ -4,6 +4,7 @@ pub mod cover;
 pub mod health;
 pub mod info;
 pub mod lyrics;
+pub mod metrics;
 pub mod mix;
 pub mod playlist;
 pub mod recommendations;

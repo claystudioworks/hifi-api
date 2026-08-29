@@ -17,6 +17,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 moka = { version = "0.12", features = ["future"] }
 governor = "0.8"
+prometheus = "0.13"
 rust-embed = "8"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
