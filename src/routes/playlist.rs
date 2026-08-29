@@ -24,6 +24,10 @@ pub async fn get_playlist(
     State(state): State<AppState>,
     Query(params): Query<PlaylistParams>,
 ) -> Result<Json<Value>, AppError> {
+    let cache_key = format!("playlist:{}:{}", params.id, params.offset);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(cached));
+    }
     let account = state.account_manager.select_account().await?;
     let token = state
         .token_manager
@@ -68,9 +72,11 @@ pub async fn get_playlist(
         .cloned()
         .unwrap_or_else(|| items_data.clone());
 
-    Ok(Json(json!({
+    let resp = json!({
         "version": state.config.api_version,
         "playlist": playlist_data,
         "items": items
-    })))
+    });
+    state.cache.insert(cache_key, resp.clone()).await;
+    Ok(Json(resp))
 }

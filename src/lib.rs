@@ -7,6 +7,7 @@
 pub mod account_manager;
 pub mod admin;
 pub mod anti_ban;
+pub mod cache;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -48,6 +49,7 @@ pub struct AppState {
     pub rate_limits: Arc<rate_limit::RateLimitSettings>,
     pub db: Option<sqlx::SqlitePool>,
     pub setup_sessions: admin::setup::Sessions,
+    pub cache: Arc<crate::cache::TidalCache>,
 }
 
 /// Build a shared HTTP client with the same tuning as the standalone binary.
@@ -177,6 +179,8 @@ pub async fn build_state(config: Config, http_client: Option<Arc<Client>>) -> Ap
 
     let proxy_manager = Arc::new(proxy_manager::ProxyManager::new(config.clone()));
 
+    let cache = Arc::new(crate::cache::TidalCache::default());
+
     token_manager
         .clone()
         .start_prewarm_loop(account_manager.clone(), http_client)
@@ -192,6 +196,7 @@ pub async fn build_state(config: Config, http_client: Option<Arc<Client>>) -> Ap
         rate_limits,
         db,
         setup_sessions: admin::setup::new_session_store(),
+        cache,
     }
 }
 

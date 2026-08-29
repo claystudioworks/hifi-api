@@ -26,6 +26,16 @@ pub async fn get_artist(
         return Err(AppError::BadRequest("Provide id or f query param".into()));
     }
 
+    // Cache key — immutable artist data, 5m TTL saves expensive album+track fan-out
+    let cache_key = if let Some(id) = params.id {
+        format!("artist:id:{}", id)
+    } else {
+        format!("artist:f:{}:{}", params.f.unwrap(), params.skip_tracks)
+    };
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(cached));
+    }
+
     let account = state.account_manager.select_account().await?;
     let token = state
         .token_manager
@@ -69,11 +79,13 @@ pub async fn get_artist(
                 })
             });
 
-        return Ok(Json(json!({
+        let resp = json!({
             "version": state.config.api_version,
             "artist": artist_data,
             "cover": cover
-        })));
+        });
+        state.cache.insert(cache_key, resp.clone()).await;
+        return Ok(Json(resp));
     }
 
     let f_id = params.f.unwrap();
@@ -132,19 +144,23 @@ pub async fn get_artist(
             .and_then(|v| v.get("items").cloned())
             .unwrap_or(json!([]));
 
-        return Ok(Json(json!({
+        let resp = json!({
             "version": state.config.api_version,
             "albums": page_data,
             "tracks": top_tracks
-        })));
+        });
+        state.cache.insert(cache_key, resp.clone()).await;
+        return Ok(Json(resp));
     }
 
     if album_ids.is_empty() {
-        return Ok(Json(json!({
+        let resp = json!({
             "version": state.config.api_version,
             "albums": page_data,
             "tracks": []
-        })));
+        });
+        state.cache.insert(cache_key, resp.clone()).await;
+        return Ok(Json(resp));
     }
 
     let sem = Arc::new(Semaphore::new(20));
@@ -209,9 +225,11 @@ pub async fn get_artist(
         .flatten()
         .collect();
 
-    Ok(Json(json!({
+    let resp = json!({
         "version": state.config.api_version,
         "albums": page_data,
         "tracks": all_tracks
-    })))
+    });
+    state.cache.insert(cache_key, resp.clone()).await;
+    Ok(Json(resp))
 }

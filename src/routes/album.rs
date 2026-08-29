@@ -27,6 +27,10 @@ pub async fn get_album(
     State(state): State<AppState>,
     Query(params): Query<AlbumParams>,
 ) -> Result<Json<Value>, AppError> {
+    let cache_key = format!("album:{}:{}:{}", params.id, params.limit, params.offset);
+    if let Some(cached) = state.cache.get(&cache_key).await {
+        return Ok(Json(cached));
+    }
     let account = state.account_manager.select_account().await?;
     let token = state
         .token_manager
@@ -110,8 +114,10 @@ pub async fn get_album(
         obj.insert("items".into(), json!(all_items));
     }
 
-    Ok(Json(json!({
+    let resp = json!({
         "version": state.config.api_version,
         "data": album_data
-    })))
+    });
+    state.cache.insert(cache_key, resp.clone()).await;
+    Ok(Json(resp))
 }
